@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{ dynamic_title }} | AI洞察局</title>
+</head>
+<body>
+<section style="max-width:677px;margin:0 auto;padding:0 16px 20px;font-family:-apple-system,BlinkMacSystemFont,'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;color:#2b2b2b;line-height:1.8;font-size:15px;background:#fff;">
+
+<!-- ===== 头部 ===== -->
+<section style="padding:28px 0 20px;border-bottom:3px solid #1a1a1a;">
+<p style="margin:0 0 6px;font-size:11px;color:#999;letter-spacing:3px;text-transform:uppercase;">AI Insight Daily</p>
+<h1 style="margin:0 0 10px;font-size:20px;color:#1a1a1a;font-weight:700;letter-spacing:0.5px;line-height:1.35;">{{ dynamic_title }}</h1>
+<p style="margin:0;font-size:13px;color:#888;">{{ subtitle }}</p>
+<p style="margin:6px 0 0;font-size:12px;color:#bbb;">{{ total }}条精选 · {{ source_count }}个来源 · 5分钟读懂AI</p>
+</section>
+
+<!-- ===== 今日要点速览 ===== -->
+{% if top_items %}
+<section style="margin-top:20px;padding:16px 16px 14px;background:#fafafa;border-radius:4px;">
+<p style="margin:0 0 10px;font-size:13px;font-weight:700;color:#1a1a1a;letter-spacing:1px;">今日要点速览</p>
+{% for item in top_items %}
+<p style="margin:0 0 7px;font-size:13px;color:#444;line-height:1.6;">
+<span style="display:inline-block;width:18px;height:18px;line-height:18px;text-align:center;border-radius:50%;background:{{ item.section_color|default('#666') if item.section_color is defined else '#666' }};color:#fff;font-size:10px;font-weight:700;margin-right:6px;">{{ loop.index }}</span>
+<strong style="color:#1a1a1a;">{{ item.cn_title }}</strong>
+{% if item.hook %}<span style="color:#999;"> — {{ item.hook }}</span>{% endif %}
+</p>
+{% endfor %}
+</section>
+{% endif %}
+
+<!-- ===== 栏目导航 ===== -->
+{% set nav_sections = sections | selectattr('articles') | list %}
+{% if nav_sections %}
+<section style="margin-top:16px;padding:10px 0;border-top:1px solid #eee;border-bottom:1px solid #eee;text-align:center;">
+{% for sec in nav_sections %}
+<a href="#sec-{{ sec.key }}" style="display:inline-block;margin:3px 6px;font-size:12px;color:#888;text-decoration:none;">{{ sec.name }}</a>
+{% endfor %}
+</section>
+{% endif %}
+
+<!-- ===== 正文 ===== -->
+{% for section in sections %}
+{% if section.articles %}
+<section id="sec-{{ section.key }}" style="margin-top:28px;">
+<h2 style="margin:0 0 16px;padding-bottom:8px;font-size:17px;font-weight:700;color:#1a1a1a;border-bottom:1px solid #e8e8e8;line-height:1.4;">
+<span style="display:inline-block;width:3px;height:16px;background:{{ section.color }};vertical-align:-2px;margin-right:8px;"></span>{{ section.name }}
+<span style="float:right;font-size:12px;color:#bbb;font-weight:400;">{{ section.articles|length }}条</span>
+</h2>
+
+{% for item in section.articles %}
+<!-- 单条 -->
+<section style="margin-bottom:20px;padding-bottom:18px;border-bottom:1px solid #f5f5f5;">
+
+{% if item.image_url %}
+<div style="margin:0 0 12px;">
+<img src="{{ item.image_url }}" alt="{{ item.cn_title }}" style="width:100%;height:auto;display:block;" />
+</div>
+{% endif %}
+
+{% if item.is_paper %}
+<!-- 论文卡片 -->
+<h3 style="margin:0 0 8px;font-size:16px;font-weight:700;color:#1a1a1a;line-height:1.5;">
+{{ item.cn_title }}
+{% if item.signal_grade == '重磅' %}
+<span style="font-size:11px;font-weight:600;color:#c0392b;background:#c0392b0d;padding:1px 6px;border-radius:2px;margin-left:4px;">重磅</span>
+{% elif item.signal_grade == '值得关注' %}
+<span style="font-size:11px;font-weight:600;color:{{ section.color }};background:{{ section.color }}0d;padding:1px 6px;border-radius:2px;margin-left:4px;">关注</span>
+{% endif %}
+</h3>
+{% if item.one_liner %}
+<p style="margin:0 0 12px;padding:8px 12px;background:#f9f9f9;font-size:13px;color:#555;line-height:1.7;border-left:2px solid {{ section.color }};">
+{{ item.one_liner }}
+</p>
+{% endif %}
+{% if item.key_points %}
+<ul style="margin:0 0 12px;padding-left:18px;font-size:14px;color:#444;line-height:1.8;">
+{% for point in item.key_points %}
+<li style="margin-bottom:3px;">{{ point }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% if item.plain_explanation %}
+<p style="margin:0 0 8px;font-size:14px;color:#555;line-height:1.8;">
+<strong style="color:#333;">通俗解读：</strong>{{ item.plain_explanation }}
+</p>
+{% endif %}
+{% if item.why_care %}
+<p style="margin:0 0 10px;font-size:14px;color:#555;line-height:1.8;">
+<strong style="color:{{ section.color }};">为什么值得关注：</strong>{{ item.why_care }}
+</p>
+{% endif %}
+{% else %}
+<!-- 常规新闻卡片 -->
+<h3 style="margin:0 0 8px;font-size:{{ '16px' if item.signal_grade == '重磅' else '15px' }};font-weight:{{ '700' if item.signal_grade in ['重磅', '值得关注'] else '400' }};color:{{ '#1a1a1a' if item.signal_grade in ['重磅', '值得关注'] else '#555' }};line-height:1.5;">
+{{ item.cn_title }}
+{% if item.signal_grade == '重磅' %}
+<span style="font-size:11px;font-weight:600;color:#c0392b;background:#c0392b0d;padding:1px 6px;border-radius:2px;margin-left:4px;">重磅</span>
+{% elif item.signal_grade == '值得关注' %}
+<span style="font-size:11px;font-weight:600;color:{{ section.color }};background:{{ section.color }}0d;padding:1px 6px;border-radius:2px;margin-left:4px;">关注</span>
+{% else %}
+<span style="font-size:11px;font-weight:400;color:#bbb;padding:1px 5px;border:1px solid #e0e0e0;border-radius:2px;margin-left:4px;">速递</span>
+{% endif %}
+{% if item.merged and item.source_count and item.source_count > 1 %}
+<span style="font-size:10px;color:#999;background:#f0f0f0;padding:1px 5px;border-radius:2px;margin-left:4px;">多源 {{ item.source_count }}</span>
+{% endif %}
+</h3>
+{% endif %}
+
+<!-- 摘要 -->
+<p style="margin:0 0 8px;font-size:14px;color:#444;line-height:1.85;">
+{{ item.cn_summary }}
+</p>
+
+<!-- 编辑点评 -->
+{% if item.editor_note %}
+<p style="margin:0 0 10px;padding:6px 0 6px 10px;border-left:3px solid {{ section.color }};font-size:13px;color:#666;line-height:1.7;">
+<strong style="color:{{ section.color }};">洞察：</strong>{{ item.editor_note }}
+</p>
+{% endif %}
+
+<!-- 标签 + 来源 -->
+<p style="margin:0;font-size:12px;color:#bbb;line-height:1.6;">
+{% for tag in item.tags %}
+<span style="margin-right:4px;color:#999;">#{{ tag }}</span>
+{% endfor %}
+<span style="color:#ddd;margin:0 4px;">|</span>
+<span style="color:#aaa;">{{ item.source }}</span>
+{% if item.merged and item.sources %}
+<span style="color:#ddd;margin:0 4px;">·</span>
+{% for src in item.sources %}
+<a href="{{ src.url }}" style="color:#aaa;text-decoration:none;margin-right:3px;">{{ src.source }}</a>
+{% endfor %}
+{% elif item.url %}
+<span style="color:#ddd;margin:0 4px;">·</span>
+<a href="{{ item.url }}" style="color:#888;text-decoration:none;">原文链接</a>
+{% endif %}
+</p>
+</section>
+
+{% endfor %}
+</section>
+{% endif %}
+{% endfor %}
+
+<!-- ===== 底部 ===== -->
+<section style="margin-top:30px;padding:20px 0 0;border-top:2px solid #1a1a1a;text-align:center;">
+<p style="margin:0 0 6px;font-size:13px;color:#888;">
+每日精选 AI 资讯 · 5分钟掌握行业脉搏
+</p>
+<p style="margin:0 0 10px;font-size:12px;color:#aaa;">
+AI洞察局 · {{ date_str }} · 转载请注明出处
+</p>
+<p style="margin:0;font-size:11px;color:#ccc;">
+你觉得今天哪条资讯最值得关注？欢迎留言讨论
+</p>
+</section>
+
+</section>
+</body>
+</html>

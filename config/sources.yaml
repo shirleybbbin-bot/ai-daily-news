@@ -1,0 +1,161 @@
+# ============================================================
+# 数据源配置 — 每日 AI 资讯日报
+# 参考用户SOP + CloudFlare-AI-Insight-Daily + TrendRadar
+# ============================================================
+
+# --- 中文 RSS 源 ---
+rss_feeds:
+  - name: 量子位
+    url: https://www.qbitai.com/feed
+    category: 行业动态
+    lang: zh
+    weight: 1.3
+
+  - name: IT之家AI
+    url: https://www.ithome.com/rss/
+    category: 行业动态
+    lang: zh
+    weight: 1.0
+
+  - name: 机器之心
+    url: https://www.jiqizhixin.com/rss
+    category: 行业动态
+    lang: zh
+    weight: 1.3
+
+  - name: 36氪科技
+    url: https://36kr.com/feed
+    category: 行业动态
+    lang: zh
+    weight: 1.0
+    keyword_filter: "AI,人工智能,大模型,LLM,GPT,OpenAI,智能,算法,机器学习"
+
+  - name: InfoQ
+    url: https://www.infoq.cn/feed
+    category: 技术动态
+    lang: zh
+    weight: 0.8
+    keyword_filter: "AI,人工智能,大模型,LLM,GPT,机器学习,深度学习"
+
+  - name: 新智元
+    url: https://feeds.feedburner.com/xinzhiyuan
+    category: 行业动态
+    lang: zh
+    weight: 1.2
+
+  # --- 英文 RSS 源 ---
+  - name: TechCrunch AI
+    url: https://techcrunch.com/category/artificial-intelligence/feed/
+    category: 行业动态
+    lang: en
+    weight: 1.1
+
+  - name: The Verge
+    url: https://www.theverge.com/rss/index.xml
+    category: 行业动态
+    lang: en
+    weight: 1.0
+    keyword_filter: "AI,artificial intelligence,machine learning,LLM,GPT,OpenAI,Google,Meta,Anthropic"
+
+  - name: Ars Technica AI
+    url: https://feeds.arstechnica.com/arstechnica/features
+    category: 行业动态
+    lang: en
+    weight: 1.0
+    keyword_filter: "AI,artificial intelligence,machine learning,LLM,GPT,OpenAI,Google,Meta,Anthropic"
+
+  - name: MIT Tech Review
+    url: https://www.technologyreview.com/feed/
+    category: 行业动态
+    lang: en
+    weight: 1.1
+    keyword_filter: "AI,artificial intelligence,machine learning,LLM,GPT,OpenAI,Google,Meta,Anthropic"
+
+  - name: VentureBeat AI
+    url: https://venturebeat.com/category/ai/feed/
+    category: 行业动态
+    lang: en
+    weight: 1.0
+
+  - name: The Rundown AI
+    url: https://www.therundown.ai/feed
+    category: 行业动态
+    lang: en
+    weight: 0.9
+
+# --- 网页抓取源 (无 RSS 的站点) ---
+web_sources:
+  - name: AIbase 头条
+    url: https://news.aibase.com/zh/news
+    category: 行业动态
+    lang: zh
+    weight: 1.5
+    selector: ".news-item"
+    title_selector: ".news-title"
+    link_selector: "a"
+    summary_selector: ".news-summary"
+    required: true  # 必须包含关注度前5
+
+  - name: AIbase 每日精选
+    url: https://www.aibase.com/zh/daily
+    category: 行业动态
+    lang: zh
+    weight: 1.3
+
+  - name: AIHOT精选
+    url: https://aihot.virxact.com
+    category: 行业动态
+    lang: zh
+    weight: 1.1
+
+  - name: 1AI快讯
+    url: https://www.1ai.net/newsflashes
+    category: 行业动态
+    lang: zh
+    weight: 0.9
+
+  - name: 24小时AI快讯
+    url: https://maomu.com/news
+    category: 行业动态
+    lang: zh
+    weight: 0.9
+
+  - name: 36氪AI板块
+    url: https://36kr.com/information/technology/
+    category: 行业动态
+    lang: zh
+    weight: 1.0
+    keyword_filter: "AI,人工智能,大模型,LLM,GPT,OpenAI,智能,算法"
+
+  - name: IT桔子创投
+    url: https://www.itjuzi.com
+    category: 投融资
+    lang: zh
+    weight: 0.8
+    keyword_filter: "AI,人工智能,大模型,智能"
+
+# --- Hacker News (API) ---
+hackernews:
+  enabled: true
+  top_n: 20
+  keyword_filter: "AI,ML,LLM,GPT,OpenAI,Anthropic,CLIP,diffusion,transformer,model,neural,deep learning,machine learning,AGI,agent,RAG,embedding,fine-tune,vision,language model"
+  min_score: 50
+  category: 大V观点
+
+# --- arXiv 论文 ---
+arxiv:
+  enabled: true
+  categories: ["cs.AI", "cs.CL", "cs.LG"]
+  max_papers: 10
+  sort_by: "relevance"
+  keyword_boost: "LLM,GPT,reasoning,agent,multimodal,diffusion,RLHF,instruction,fine-tuning,retrieval,vision-language,tool use,code generation"
+  category_tag: "论文精选"
+
+# --- GitHub Trending (开源热榜) ---
+github_trending:
+  enabled: true
+  max_items: 8
+  since: "daily"  # daily, weekly, monthly
+  languages: ["python", "jupyter-notebook"]
+  keyword_filter: "AI,ML,LLM,GPT,transformer,diffusion,neural,agent,RAG,vision-language,machine learning,deep learning,large language model,fine-tune,embedding,CLIP,stable diffusion,langchain,autonomous,reasoning"
+  category_tag: "开源热榜"

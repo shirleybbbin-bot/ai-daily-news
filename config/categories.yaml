@@ -1,0 +1,74 @@
+# ============================================================
+# 栏目分类配置
+# ============================================================
+
+categories:
+  - key: headline
+    name: "🚀 今日头条"
+    description: "最重要、关注度最高的 AI 行业新闻"
+    min_items: 3
+    max_items: 5
+    tags: ["头条", "重磅", "突发"]
+
+  - key: investment
+    name: "💰 投融资"
+    description: "融资、收购、投资等资本动态"
+    min_items: 0
+    max_items: 5
+    tags: ["融资", "收购", "投资", "估值"]
+
+  - key: policy
+    name: "📋 政策监管"
+    description: "政策法规、监管动态"
+    min_items: 0
+    max_items: 3
+    tags: ["政策", "监管", "合规", "法规"]
+
+  - key: technology
+    name: "🔬 技术突破"
+    description: "技术进展、模型发布、架构创新"
+    min_items: 2
+    max_items: 6
+    tags: ["技术", "模型", "架构", "训练"]
+
+  - key: product
+    name: "📱 产品发布"
+    description: "新产品发布、功能更新"
+    min_items: 2
+    max_items: 6
+    tags: ["产品", "发布", "上线", "更新"]
+
+  - key: bigtech
+    name: "🏢 大厂动态"
+    description: "科技巨头的 AI 战略和动作"
+    min_items: 0
+    max_items: 5
+    tags: ["OpenAI", "Google", "Meta", "微软", "百度", "阿里", "腾讯", "字节"]
+
+  - key: opinion
+    name: "🗣️ 大V观点"
+    description: "行业领袖、专家的观点和言论"
+    min_items: 1
+    max_items: 4
+    tags: ["观点", "言论", "预测", "判断"]
+
+  - key: paper
+    name: "📄 论文精选"
+    description: "arXiv 前沿论文"
+    min_items: 2
+    max_items: 6
+    tags: ["论文", "Paper", "arXiv"]
+
+  - key: opensource
+    name: "📦 开源热榜"
+    description: "GitHub 热门 AI 项目"
+    min_items: 1
+    max_items: 4
+    tags: ["开源", "GitHub", "repo"]
+
+  - key: event
+    name: "📅 活动预告"
+    description: "会议、峰会、活动"
+    min_items: 0
+    max_items: 3
+    tags: ["会议", "活动", "峰会"]

@@ -1,0 +1,71 @@
+# ============================================================
+# 全局设置
+# ============================================================
+
+pipeline:
+  lookback_hours: 24
+  max_items: 35
+  min_items: 25
+  summary_min_chars: 90
+  summary_max_chars: 160
+  title_max_chars: 20
+  tags_per_item: 3
+  dedup_similarity_threshold: 0.65
+
+llm:
+  provider: zhipu
+  model: glm-5.2
+  temperature: 0.3
+  max_tokens: 4096
+  # OpenAI-compatible endpoint
+  base_url: https://open.bigmodel.cn/api/paas/v4
+
+# 校准/质检规则
+quality_control:
+  require_source_diversity: true   # 来源至少覆盖 4 个不同站点
+  require_aibase_top5: true       # 必须包含 AIbase 关注度前5
+  min_sources: 4
+  check_summary_length: true
+  check_no_duplicates: true
+  check_no_english_titles: true   # 英文标题必须中文化
+  check_tags_count: true
+  max_items_per_source: 5         # 单一来源最多5条
+
+output:
+  dir: data
+  filename_pattern: "ai-daily-{date}.html"
+  json_filename_pattern: "today_data.json"
+  template: src/templates/daily_report.html
+
+wechat:
+  enabled: false
+  author: "AI洞察局"
+  # 封面图由 AI 生成或使用默认图
+  default_cover_url: ""
+
+# 图片提取配置
+image_extraction:
+  enabled: true
+  validate_urls: true            # 验证图片URL可访问性 (HEAD请求)
+  max_fetches: 60                # 最多抓取的页面数
+  min_file_size: 2048            # 最小文件大小(字节)，过滤追踪像素
+  min_width: 200                 # 最小图片宽度
+  min_height: 150                # 最小图片高度
+  rate_limit_ms: 300             # 每次抓取间隔(毫秒)
+  strategies:                    # 策略优先级 (从上到下)
+    - rss_summary                # RSS摘要内嵌图片
+    - newspaper3k                # newspaper3k top_image
+    - trafilatura                # trafilatura 提取+元数据
+    - jsonld                     # JSON-LD 结构化数据
+    - og_image                   # og:image/twitter:image meta
+    - body_image                 # 正文首张图片 (含懒加载)
+  fallback_image_url: ""         # 无图时的占位图URL (留空则不显示图片)
+
+# 多重事实校对配置
+fact_check:
+  enabled: true                   # 启用事实校对
+  lookback_hours: 48              # 时效性：发布时间窗口(小时)
+  check_url_accessible: true      # 真实性：源URL可达性
+  check_entity_match: true        # 真实性：关键实体在原文出现
+  check_numbers: true             # 准确性：关键数字在原文溯源
+  check_timeliness: true          # 时效性：发布日期校验

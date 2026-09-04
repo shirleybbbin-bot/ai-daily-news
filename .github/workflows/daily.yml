@@ -1,0 +1,77 @@
+name: AI Daily News
+
+on:
+  schedule:
+    # 每天北京时间 07:30 (UTC 23:30 前一天)
+    - cron: '30 23 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只生成预览，不发布'
+        type: boolean
+        default: false
+      skip_collect:
+        description: '复用已采集数据（测试用）'
+        type: boolean
+        default: false
+      no_calibrate:
+        description: '跳过校准+一致性自检'
+        type: boolean
+        default: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          WECHAT_APP_ID: ${{ secrets.WECHAT_APP_ID }}
+          WECHAT_APP_SECRET: ${{ secrets.WECHAT_APP_SECRET }}
+        run: |
+          FLAGS=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            FLAGS="$FLAGS --dry-run"
+          fi
+          if [ "${{ github.event.inputs.skip_collect }}" = "true" ]; then
+            FLAGS="$FLAGS --skip-collect"
+          fi
+          if [ "${{ github.event.inputs.no_calibrate }}" = "true" ]; then
+            FLAGS="$FLAGS --no-calibrate"
+          fi
+          python3 build_daily.py $FLAGS
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-daily-report-${{ github.run_id }}
+          path: |
+            data/ai-daily-*.html
+            data/today_data.json
+            data/quality_report.json
+            data/raw_collected.json
+          retention-days: 30
+
+      - name: Commit report to repo
+        run: |
+          git config --global user.name "AI Daily Bot"
+          git config --global user.email "actions@github.com"
+          git add data/ai-daily-*.html data/today_data.json data/quality_report.json 2>/dev/null || true
+          git commit -m "📰 AI Daily Report $(date -u +%Y-%m-%d)" || echo "No changes to commit"
+          git push || echo "No changes to push"

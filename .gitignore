@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+*.mp3
+data/raw_collected.json
+data/previous_titles.json
+data/quality_report.json
+outputs/
