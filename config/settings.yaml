@@ -69,3 +69,19 @@ fact_check:
   check_entity_match: true        # 真实性：关键实体在原文出现
   check_numbers: true             # 准确性：关键数字在原文溯源
   check_timeliness: true          # 时效性：发布日期校验
+
+# 一致性自检后的处理
+coherence:
+  drop_fail: true                 # 出稿前自动剔除 verdict=fail 的条目（改不回来的"加戏"）
+  min_keep: 25                    # 剔除后不得低于此条数，否则按分数回补 fail 条目标注待核
+
+# 原文正文补全（放在 process_and_summarize 之前）
+# 不少源 RSS 摘要极短（实测 InfoQ 中位 7 字、量子位 17 字、HN 28 字），
+# LLM 拿空壳原文只能凭标题脑补 → 一致性自检 fail。
+# 这里先用 trafilatura 抓正文补上，补不到的才丢弃。
+source_text:
+  enabled: true
+  min_chars: 50                   # 低于此长度视为原文不足
+  max_workers: 8                  # 并发抓取数
+  timeout: 20                     # 单页抓取超时(秒)
+  max_chars: 2500                 # 正文截断长度

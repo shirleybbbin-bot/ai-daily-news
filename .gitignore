@@ -7,3 +7,5 @@ data/raw_collected.json
 data/previous_titles.json
 data/quality_report.json
 outputs/
+.venv/
+.workbuddy/

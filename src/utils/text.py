@@ -25,7 +25,34 @@ def truncate_text(text: str, max_chars: int = 160) -> str:
         idx = truncated.rfind(sep)
         if idx > max_chars * 0.6:
             return truncated[:idx + 1]
-    return truncated.rstrip() + '…'
+    # 省略号也要占一个字符，否则会超出 max_chars
+    return truncated.rstrip()[:max_chars - 1] + '…'
+
+
+# 标题最大字数。宁可长一点，也不要把"性能逼近Astra且"这种半句话切出来。
+TITLE_MAX_CHARS = 40
+# 允许断句的位置（按优先级尝试，切完必须仍是完整语义片段）
+_TITLE_SEPARATORS = ['。', '，', '、', '：', '；', '—', '-', ' ']
+
+
+def trim_title(title: str, max_chars: int = TITLE_MAX_CHARS) -> str:
+    """Trim a title to max_chars WITHOUT leaving a dangling half-clause.
+
+    直接用 [:30] 硬切会把标题切成 "...性能逼近Astra且" 这种残句。
+    这里改为：先按自然断点回退，找不到断点才退化到省略号。
+    """
+    if not title:
+        return ""
+    title = title.strip()
+    if len(title) <= max_chars:
+        return title
+    window = title[:max_chars]
+    for sep in _TITLE_SEPARATORS:
+        idx = window.rfind(sep)
+        # 断点不能太靠前，否则信息量损失过大
+        if idx >= max_chars * 0.5:
+            return window[:idx].rstrip('，、：；—- ')
+    return window.rstrip()[:max_chars - 1] + '…'
 
 
 def is_english_title(title: str) -> bool:

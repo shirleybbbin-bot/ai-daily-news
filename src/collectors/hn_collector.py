@@ -1,4 +1,5 @@
 """Hacker News collector via Firebase API."""
+from datetime import datetime, timezone
 from typing import List, Dict
 from utils.http import fetch_json
 from utils.text import keyword_match
@@ -39,6 +40,18 @@ def collect_hackernews(config: Dict) -> List[Dict]:
         if keyword_filter and not keyword_match(title, keyword_filter):
             continue
 
+        pub_date = ''
+        ts = story.get('time')
+        if ts:
+            # HN API returns a unix epoch; convert to ISO so the scorer can
+            # compute a real freshness score instead of falling back to neutral.
+            try:
+                pub_date = datetime.fromtimestamp(
+                    int(ts), tz=timezone.utc
+                ).strftime('%Y-%m-%dT%H:%M:%S%z')
+            except (TypeError, ValueError, OSError):
+                pub_date = ''
+
         items.append({
             'title': title,
             'summary': f"Hacker News 热帖，得分 {score}，评论 {story.get('descendants', 0)}",
@@ -48,7 +61,7 @@ def collect_hackernews(config: Dict) -> List[Dict]:
             'category_hint': category,
             'lang': 'en',
             'weight': 1.0,
-            'pub_date': '',
+            'pub_date': pub_date,
             'is_paper': False,
             'hn_score': score,
         })

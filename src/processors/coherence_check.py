@@ -14,6 +14,7 @@ import json
 import re
 from typing import Dict, List, Tuple
 from processors.summarizer import llm_chat
+from utils.text import trim_title, truncate_text
 
 
 COHERENCE_SYSTEM = """你是一个事实核查员，负责检查AI新闻摘要是否忠于原文。
@@ -54,6 +55,28 @@ COHERENCE_USER_TEMPLATE = """请检查以下摘要是否忠于原文：
 }}"""
 
 
+def _parse_json_loose(text: str):
+    """宽松解析 LLM 输出。
+
+    模型有时会在 JSON 之后追加解释文字，直接 json.loads 会抛
+    "Extra data" 而白白丢掉一次已经完成的有效核查（实测遇到过）。
+    这里退化一步：扫描并取出第一个完整可解析的 JSON 对象。
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    decoder = json.JSONDecoder()
+    idx = text.find('{')
+    while idx != -1:
+        try:
+            obj, _ = decoder.raw_decode(text[idx:])
+            return obj
+        except json.JSONDecodeError:
+            idx = text.find('{', idx + 1)
+    return None
+
+
 def check_coherence(item: Dict) -> Dict:
     """Check if a summary is coherent with its source text.
 
@@ -86,7 +109,10 @@ def check_coherence(item: Dict) -> Dict:
     try:
         clean = re.sub(r'```json\s*', '', result)
         clean = re.sub(r'```\s*', '', clean).strip()
-        parsed = json.loads(clean)
+        parsed = _parse_json_loose(clean)
+        if parsed is None:
+            item['coherence'] = {'verdict': 'skip', 'reason': 'unparsable response'}
+            return item
 
         verdict = parsed.get('verdict', 'pass')
         coherence_info = {
@@ -100,8 +126,8 @@ def check_coherence(item: Dict) -> Dict:
             repaired_summary = parsed.get('repaired_summary', '')
 
             if repaired_summary and len(repaired_summary) >= 80:
-                item['cn_title'] = repaired_title[:20] if repaired_title else cn_title
-                item['cn_summary'] = repaired_summary[:200]
+                item['cn_title'] = trim_title(repaired_title) if repaired_title else cn_title
+                item['cn_summary'] = truncate_text(repaired_summary, 160)
                 coherence_info['repaired'] = True
             else:
                 # Repair was insufficient, mark as fail
@@ -114,6 +140,35 @@ def check_coherence(item: Dict) -> Dict:
     except (json.JSONDecodeError, KeyError) as e:
         item['coherence'] = {'verdict': 'skip', 'reason': f'parse error: {e}'}
         return item
+
+
+def drop_failed_items(items: List[Dict], min_keep: int = 25) -> Tuple[List[Dict], Dict]:
+    """剔除一致性 fail 的条目 —— 改不回来的"加戏"不该流到稿子里。
+
+    兜底：如果剔除后不足 min_keep 条，按分数从高到低保留若干 fail 条目补足，
+    避免某天 LLM 大面积误判时稿子直接空掉（宁可留着待人工核，也好过没内容）。
+    """
+    stats = {'checked': len(items), 'dropped': 0, 'kept_fail': 0}
+
+    good = [i for i in items if i.get('coherence', {}).get('verdict') != 'fail']
+    bad = [i for i in items if i.get('coherence', {}).get('verdict') == 'fail']
+    if not bad:
+        stats['remaining'] = len(good)
+        return good, stats
+
+    if len(good) >= min_keep:
+        stats['dropped'] = len(bad)
+        stats['remaining'] = len(good)
+        return good, stats
+
+    # 不够 min_keep 条：按分数补足（items 此刻已是分数降序）
+    need = min_keep - len(good)
+    ranked_bad = sorted(bad, key=lambda x: x.get('_score', 0), reverse=True)
+    stats['kept_fail'] = min(need, len(ranked_bad))
+    stats['dropped'] = len(bad) - stats['kept_fail']
+    kept = good + ranked_bad[:need]
+    stats['remaining'] = len(kept)
+    return kept, stats
 
 
 def coherence_batch(items: List[Dict]) -> Tuple[List[Dict], Dict]:

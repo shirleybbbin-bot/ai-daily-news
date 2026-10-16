@@ -34,6 +34,10 @@ def collect_arxiv(config: Dict) -> List[Dict]:
             link_elem = entry.find('atom:id', ns)
             link = link_elem.text if link_elem is not None else ''
 
+            # Atom <published> e.g. 2026-10-04T09:12:34Z
+            pub_elem = entry.find('atom:published', ns)
+            pub_date = pub_elem.text.strip() if pub_elem is not None and pub_elem.text else ''
+
             authors = []
             for author in entry.findall('atom:author', ns):
                 name_elem = author.find('atom:name', ns)
@@ -66,7 +70,7 @@ def collect_arxiv(config: Dict) -> List[Dict]:
                 'category_hint': category_tag,
                 'lang': 'en',
                 'weight': 1.1,
-                'pub_date': '',
+                'pub_date': pub_date,
                 'is_paper': True,
                 'authors': authors[:5],
                 'arxiv_category': primary_cat,

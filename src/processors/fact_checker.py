@@ -53,8 +53,9 @@ def check_url_accessible(url: str, timeout: int = 10) -> Tuple[bool, str]:
         resp = requests.head(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
         if resp.status_code == 200:
             return True, 'OK'
-        if resp.status_code in (403, 405):
-            # 有些站点禁止HEAD，尝试GET
+        # 很多站点对 HEAD 支持不完整：403/405 禁 HEAD，404/400 是 HEAD 路由缺失，
+        # 429 是限流。这些都必须回落 GET 再判，否则会把可达页面误报成"源URL不可达"。
+        if resp.status_code in (403, 405, 404, 400, 429):
             resp = requests.get(url, headers=HEADERS, timeout=timeout, allow_redirects=True)
             if resp.status_code == 200:
                 return True, 'OK(GET)'
@@ -84,22 +85,58 @@ def extract_publish_date(html: str) -> datetime | None:
     return None
 
 
+def parse_item_date(date_str: str) -> datetime | None:
+    """解析采集端提供的时间戳（多种格式）。"""
+    if not date_str:
+        return None
+    date_str = str(date_str).strip()
+    formats = [
+        '%Y-%m-%dT%H:%M:%S%z', '%Y-%m-%dT%H:%M:%SZ', '%Y-%m-%dT%H:%M:%S',
+        '%Y-%m-%d %H:%M:%S', '%Y-%m-%d', '%Y/%m/%d',
+        '%a, %d %b %Y %H:%M:%S %z', '%a, %d %b %Y %H:%M:%S %Z',
+        '%a, %d %b %Y %H:%M:%S',
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str[:31], fmt)
+        except ValueError:
+            continue
+    # 去掉时区名后缀再试（如 'GMT'）
+    try:
+        return datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def _now_for(pub_date: datetime) -> datetime:
+    """取与 pub_date 可比较的当前时间，避免 naive/aware 混算导致小时数虚高。"""
+    if pub_date.tzinfo is not None:
+        from datetime import timezone
+        return datetime.now(timezone.utc)
+    return datetime.now()
+
+
 def check_timeliness(item: Dict, html: str, lookback_hours: int = 48) -> Tuple[bool, str]:
-    """校验时效性：发布日期是否在 lookback 窗口内。"""
-    pub_date = extract_publish_date(html)
+    """校验时效性：发布日期是否在 lookback 窗口内。
+
+    优先级：采集端 item['pub_date'] > HTML 抓取 > RSS published。
+    采集端时间戳（HN API time / arXiv published / RSS pubDate）是权威来源；
+    从页面 meta 抓的日期可能是文章原始发布时间、时区错位的日期或无关日期，
+    只能作为兜底，不能覆盖采集端。
+    """
+    pub_date = None
+    for key in ('pub_date', 'published', 'published_at', 'date'):
+        pub_date = parse_item_date(item.get(key, ''))
+        if pub_date:
+            break
+
     if not pub_date:
-        # 如果提取不到日期，检查RSS pubDate
-        rss_date = item.get('published', '')
-        if rss_date:
-            try:
-                pub_date = datetime.strptime(rss_date[:25], '%a, %d %b %Y %H:%M:%S')
-            except ValueError:
-                pass
+        pub_date = extract_publish_date(html)
 
     if not pub_date:
         return True, '日期未知(跳过)'
 
-    now = datetime.now(pub_date.tzinfo) if pub_date.tzinfo else datetime.now()
+    now = _now_for(pub_date)
     diff = now - pub_date
     hours_ago = diff.total_seconds() / 3600
 
@@ -119,6 +156,21 @@ def extract_key_numbers(text: str) -> List[str]:
     return numbers
 
 
+def build_source_text(item: Dict, html: str) -> str:
+    """构建可比对的原文语料。
+
+    只比对重新抓取的页面 HTML 会大量误报：聚合站/公众号/AIHOT/InfoQ 多为
+    JS 渲染的空壳页，正文其实在采集端已取到的 summary/title 里。
+    因此语料 = 页面正文 + 采集端原文标题与摘要。
+    """
+    parts = [html[:80000], item.get('summary', ''), item.get('title', ''),
+             item.get('description', '')]
+    text = ' '.join(p for p in parts if p)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    # 同时保留去空格版本，解决 "2026 年" vs "2026年" 的匹配失败
+    return text + ' ' + re.sub(r'\s+', '', text)
+
+
 def check_accuracy(item: Dict, html: str) -> Tuple[bool, List[str]]:
     """校验准确性：摘要中的关键数字是否在原文中出现。"""
     summary = item.get('cn_summary', '') + item.get('cn_title', '')
@@ -127,11 +179,7 @@ def check_accuracy(item: Dict, html: str) -> Tuple[bool, List[str]]:
     if not key_numbers:
         return True, ['无关键数字(跳过)']
 
-    # 取原文前80KB做匹配
-    source_text = html[:80000]
-    # 去HTML标签
-    source_text = re.sub(r'<[^>]+>', ' ', source_text)
-    source_text = re.sub(r'\s+', ' ', source_text)
+    source_text = build_source_text(item, html)
 
     missing = []
     for num in key_numbers:
@@ -153,7 +201,7 @@ def check_entity_mentioned(item: Dict, html: str) -> Tuple[bool, List[str]]:
     found_entities = []
     missing_entities = []
 
-    source_text = html[:80000].lower()
+    source_text = build_source_text(item, html).lower()
     for entity in ENTITY_HINTS:
         if entity.lower() in title.lower():
             if entity.lower() in source_text:

@@ -16,6 +16,11 @@ rss_feeds:
     category: 行业动态
     lang: zh
     weight: 1.0
+    # IT之家是"全站"RSS（不是AI频道），不过滤会混入消费电子/汽车/游戏等无关快讯。
+    # 实测 2026-09-20：30 条里仅 6 条与 AI 相关，其余是剃须刀/汽车/显示器/游戏。
+    keyword_filter: "AI,人工智能,大模型,大语言模型,LLM,GPT,ChatGPT,OpenAI,Claude,Gemini,DeepSeek,智谱,通义,千问,Qwen,文心,讯飞,豆包,Kimi,昇腾,英伟达,NVIDIA,算力,智能体,机器学习,深度学习,神经网络,AIGC,多模态,生成式,AGI,算法"
+    # 排除词优先级高于上面的包含词：汽车/家电/外设类快讯常因摘要含"智能"(智能座舱等)而漏过
+    keyword_exclude: "SUV,充电桩,内饰,众筹,剃须刀,显示器,键盘,鼠标,耳机,路由器,充电宝,电饭煲,扫地机,空调,洗衣机,液晶电视,游戏主机"
 
   - name: 机器之心
     url: https://www.jiqizhixin.com/rss

@@ -44,6 +44,8 @@ jobs:
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
           WECHAT_APP_ID: ${{ secrets.WECHAT_APP_ID }}
           WECHAT_APP_SECRET: ${{ secrets.WECHAT_APP_SECRET }}
+          # src/ 内模块用裸 import（utils.xxx / processors.xxx），必须让 src 在导入路径上
+          PYTHONPATH: ${{ github.workspace }}/src
         run: |
           FLAGS=""
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then

@@ -13,6 +13,7 @@ def collect_rss(feed_config: Dict, lookback_hours: int = 24) -> List[Dict]:
     lang = feed_config.get('lang', 'zh')
     weight = feed_config.get('weight', 1.0)
     keyword_filter = feed_config.get('keyword_filter', '')
+    keyword_exclude = feed_config.get('keyword_exclude', '')
 
     print(f"  [RSS] Fetching: {name} ({url})")
     try:
@@ -36,6 +37,9 @@ def collect_rss(feed_config: Dict, lookback_hours: int = 24) -> List[Dict]:
             # Apply keyword filter
             combined_text = f"{title} {summary}"
             if keyword_filter and not keyword_match(combined_text, keyword_filter):
+                continue
+            # 排除词优先：消费电子/汽车等噪音常因摘要里带"智能"字样而漏过正向过滤
+            if keyword_exclude and keyword_match(combined_text, keyword_exclude):
                 continue
 
             # Check recency

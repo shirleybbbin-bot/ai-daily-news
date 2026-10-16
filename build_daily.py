@@ -16,7 +16,11 @@ import yaml
 from datetime import datetime, timedelta
 
 # Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _ROOT)
+# src/ 内的模块互相引用用的是裸 import（utils.text / processors.xxx），
+# 所以 src/ 本身也要在 sys.path 上，否则 ModuleNotFoundError: No module named 'utils'
+sys.path.insert(0, os.path.join(_ROOT, 'src'))
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -33,7 +37,9 @@ from src.processors.scorer import rank_items, select_top_items
 from src.processors.calibrator import calibrate_batch, calibrate_paper
 from src.processors.fact_checker import fact_check_batch
 from src.processors.story_merger import merge_stories
-from src.processors.coherence_check import coherence_batch
+from src.processors.post_merge import post_summarize_merge
+from src.processors.coherence_check import coherence_batch, drop_failed_items
+from src.processors.content_fetcher import enrich_source_text
 from src.publishers.html_publisher import generate_html, save_html
 from src.publishers.wechat_publisher import publish_to_wechat
 from src.utils.validator import print_report
@@ -175,6 +181,18 @@ def process_and_summarize(items: list, config: dict, skip_calibration: bool = Fa
                               max_per_source=max_per_source,
                               max_per_category=max_per_category)
 
+    # Step 5.5: Post-summary semantic duplicate merge.
+    # The Step-1.5 story_merger runs BEFORE summarization, so it only ever sees
+    # English source titles and misses cross-source same-event pairs. This pass
+    # re-checks on cn_title/cn_summary with an LLM judge (1 call).
+    print("\n🔀 === 语义去重（摘要后）===")
+    try:
+        items, post_merge_stats = post_summarize_merge(items)
+        if post_merge_stats.get('groups', 0) > 0:
+            print(f"  折叠了 {post_merge_stats['groups']} 组同源报道")
+    except Exception as e:
+        print(f"  [!] Post-merge error (ignored): {e}")
+
     # Step 6: Self-calibration (NEW - 校准机制)
     if not skip_calibration:
         print("\n🔍 === 自校准机制 ===")
@@ -196,12 +214,29 @@ def process_and_summarize(items: list, config: dict, skip_calibration: bool = Fa
         print("\n⏭️ 跳过自校准（快速出稿模式）")
 
     # Step 6.5: Coherence self-check — verify summaries against source text
+    coh_stats = {}
     if not skip_calibration:
         print("\n🔎 === 一致性自检 ===")
         items, coh_stats = coherence_batch(items)
         failed = coh_stats.get('failed', 0)
         if failed > 0:
             print(f"  ⚠️ {failed} 条摘要与原文不一致，已尝试修正")
+
+    # Step 6.6: 剔除改不回来的"加戏"条目 —— 不让它们混进最终稿
+    drop_cfg = settings.get('coherence', {}) or {}
+    if drop_cfg.get('drop_fail', True):
+        min_items_cfg = settings.get('pipeline', {}).get('min_items', 25)
+        before = len(items)
+        items, drop_stats = drop_failed_items(items, min_keep=drop_cfg.get('min_keep', min_items_cfg))
+        if drop_stats['dropped']:
+            print(f"  🗑 剔除严重不一致条目: {drop_stats['dropped']} 条 "
+                  f"(保留 {drop_stats['remaining']}/{before})")
+        if drop_stats['kept_fail']:
+            print(f"  ⚠️ 剔除后会低于 {min_items_cfg} 条，"
+                  f"按分数回补了 {drop_stats['kept_fail']} 条 fail 条目，需人工复核")
+        # 条目数变了，重新按排名分位分级，保证三档层次仍然成立
+        if len(items) != before:
+            items = rank_items(items)
 
     return items
 
@@ -271,6 +306,28 @@ def main():
     if not items:
         print("❌ 未采集到任何数据！")
         sys.exit(1)
+
+    # Step 1.5: 正文补全 —— 摘要过短的条目先抓原文正文，抓不到才丢弃。
+    # 目的：从源头消灭"凭标题脑补"导致的编造（一致性自检 fail）。
+    st_cfg = settings.get('source_text', {})
+    if st_cfg.get('enabled', True):
+        print("\n📄 === 原文正文补全 ===")
+        before = len(items)
+        items, st_stats = enrich_source_text(
+            items,
+            enabled=True,
+            min_chars=st_cfg.get('min_chars', 50),
+            max_workers=st_cfg.get('max_workers', 8),
+            timeout=st_cfg.get('timeout', 20),
+        )
+        print(f"  原文不足(<{st_cfg.get('min_chars', 50)}字): {st_stats['thin']} 条")
+        print(f"  ✅ 正文补全成功: {st_stats['enriched']} 条")
+        print(f"  🗑 无法获取正文已剔除: {st_stats['dropped']} 条")
+        print(f"  📊 保留: {st_stats['kept']}/{before} 条")
+        min_items_cfg = settings.get('pipeline', {}).get('min_items', 25)
+        if len(items) < min_items_cfg:
+            print(f"  ⚠️ 补全后仅剩 {len(items)} 条，低于 min_items({min_items_cfg})，"
+                  f"今日稿可能不够丰满，可考虑放宽 source_text.min_chars")
 
     # Step 2: Process & Summarize
     items = process_and_summarize(items, config, skip_calibration=args.no_calibrate)

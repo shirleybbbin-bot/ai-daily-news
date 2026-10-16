@@ -18,15 +18,41 @@ SECTION_META = {
     'event':       {'name': '活动预告',     'color': '#2c5282'},
 }
 
-# opinion/event 已合并到 bigtech/product，不单独展示
+# 所有分区按此顺序展示（SECTION_META 中已定义 opinion/event 的中文名与配色）
 SECTION_ORDER = ['headline', 'investment', 'policy', 'technology', 'product',
-                 'bigtech', 'paper', 'opensource']
+                 'bigtech', 'paper', 'opensource', 'opinion', 'event']
+
+# 分类器偶尔输出中文标签或近义英文键，统一归一化，避免条目在渲染阶段被静默丢弃
+CATEGORY_ALIAS = {
+    '行业动态': 'bigtech',
+    'industry': 'bigtech',
+    '技术动态': 'technology',
+    'tech': 'technology',
+    '研究': 'paper',
+    '开源': 'opensource',
+    '投融资': 'investment',
+    '政策': 'policy',
+    '产品': 'product',
+    '观点': 'opinion',
+    '活动': 'event',
+    '头条': 'headline',
+}
 
 TOP_N = 5
 
 
+def normalize_category(article: Dict) -> str:
+    """把条目分类归一化为 SECTION_META 中已知的英文键。"""
+    cat = (article.get('category') or '').strip()
+    if cat in SECTION_META:
+        return cat
+    return CATEGORY_ALIAS.get(cat, cat)
+
+
 def build_sections(articles: List[Dict]) -> List[Dict]:
     """Group articles by category into report sections."""
+    for article in articles:
+        article['category'] = normalize_category(article)
     sections = []
     for cat_key in SECTION_ORDER:
         cat_articles = [a for a in articles if a.get('category') == cat_key]
@@ -36,6 +62,16 @@ def build_sections(articles: List[Dict]) -> List[Dict]:
             'name': meta['name'],
             'color': meta['color'],
             'articles': cat_articles,
+        })
+    # 兜底：归一化后仍落在已知分区之外的条目，归入"其他"分区，确保不丢内容
+    known = set(SECTION_ORDER)
+    orphans = [a for a in articles if a.get('category') not in known]
+    if orphans:
+        sections.append({
+            'key': 'other',
+            'name': '其他动态',
+            'color': '#666',
+            'articles': orphans,
         })
     return sections
 

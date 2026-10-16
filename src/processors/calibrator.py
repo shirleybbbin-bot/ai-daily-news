@@ -4,6 +4,7 @@ import json
 import re
 from typing import Dict, List, Tuple
 from processors.summarizer import llm_chat
+from utils.text import trim_title, truncate_text
 
 
 CALIBRATE_SYSTEM = """你是AI资讯日报的质检编辑（校准员），负责对已生成的新闻摘要进行二次审核。
@@ -34,7 +35,7 @@ CALIBRATE_USER_TEMPLATE = """请审核并修正以下新闻摘要：
 
 请输出修正后的JSON（如无修改则原样输出）：
 {{
-  "cn_title": "修正后的中文标题，20字以内",
+  "cn_title": "修正后的中文标题，20-28字，必须是完整短句、不得截断",
   "cn_summary": "修正后的中文摘要，90-160字",
   "tags": ["标签1", "标签2", "标签3"],
   "category": "分类key",
@@ -68,8 +69,8 @@ def calibrate_item(item: Dict) -> Dict:
         parsed = json.loads(clean)
 
         if parsed.get('corrected', False):
-            item['cn_title'] = parsed.get('cn_title', item['cn_title'])[:20]
-            item['cn_summary'] = parsed.get('cn_summary', item['cn_summary'])[:200]
+            item['cn_title'] = trim_title(parsed.get('cn_title', item['cn_title']))
+            item['cn_summary'] = truncate_text(parsed.get('cn_summary', item['cn_summary']), 160)
             item['tags'] = parsed.get('tags', item.get('tags', []))[:3]
             if parsed.get('category'):
                 item['category'] = parsed['category']
@@ -176,12 +177,12 @@ def calibrate_paper(item: Dict) -> Dict:
         parsed = json.loads(clean)
 
         if parsed.get('corrected', False):
-            item['cn_title'] = parsed.get('cn_title', item['cn_title'])[:25]
+            item['cn_title'] = trim_title(parsed.get('cn_title', item['cn_title']))
             item['one_liner'] = parsed.get('one_liner', item.get('one_liner', ''))
             item['key_points'] = parsed.get('key_points', item.get('key_points', []))
             item['plain_explanation'] = parsed.get('plain_explanation', item.get('plain_explanation', ''))
             item['why_care'] = parsed.get('why_care', item.get('why_care', ''))
-            item['cn_summary'] = parsed.get('cn_summary', item['cn_summary'])[:200]
+            item['cn_summary'] = truncate_text(parsed.get('cn_summary', item['cn_summary']), 160)
             item['calibration_issues'] = parsed.get('issues_found', [])
         return item
     except (json.JSONDecodeError, KeyError):

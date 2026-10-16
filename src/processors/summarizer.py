@@ -5,13 +5,18 @@ import json
 import re
 from typing import Dict, List, Optional
 from openai import OpenAI
+from utils.text import trim_title, truncate_text
 
 
 def get_llm_client() -> OpenAI:
     """Create OpenAI-compatible client for GLM API."""
+    # timeout 必须显式设置：SDK 默认 600s，单条卡住会拖死整条流水线
+    # max_retries=0：失败交给上层 except 处理，避免 SDK 内部重试叠加放大等待时间
     return OpenAI(
         api_key=os.environ.get('LLM_API_KEY', ''),
         base_url=os.environ.get('LLM_BASE_URL', 'https://open.bigmodel.cn/api/paas/v4'),
+        timeout=float(os.environ.get('LLM_TIMEOUT', '120')),
+        max_retries=int(os.environ.get('LLM_MAX_RETRIES', '1')),
     )
 
 
@@ -46,9 +51,20 @@ SUMMARIZE_SYSTEM = """你是一名资深AI科技记者，在科技媒体干了�
 你的写作原则：
 1. **忠于原文**：摘要必须严格来源于原文，不捏造、不歪曲、不添加原文没有的信息。
 2. **说人话**：像跟同事聊天一样写，不要用书面套话。把"此举旨在"换成"目的是"，把"被视为"换成"可以看作"，但更好的方式是直接说出来。
-3. **信息密度高**：90-160字塞进最多的有效信息——谁做了什么、多少钱、什么效果、什么影响。少用形容词，多用事实。
+3. **信息密度高**：90-150字塞进最多的有效信息——谁做了什么、多少钱、什么效果、什么影响。少用形容词，多用事实。
 4. **句式要活**：不要每条都"XX公司发布XX，具有XX特点，将用于XX领域"这个套路。可以倒装、可以短句、可以设问、可以一句话开头。
 5. **技术要准**：公司名、产品名、技术术语用中文规范名，不确定的保留英文原文。
+
+"忠于原文"的硬约束（违反任何一条即不合格，这是最高优先级）：
+- **禁止加戏**：不得添加原文没有出现的背景、动机、目的、因果、评价、趋势判断或结语。
+  典型错误：原文只说"关闭 RSS"，摘要写成"为防 AI 爬虫抓取、面对 AI 公司对训练数据的渴求"；
+  原文只说"支付罚金风险"，摘要补充"罚款 1 万新币"；原文没说"仍在调查中"，摘要加"目前争议仍在调查中"。
+- **限定词一个都不能丢**：原文的"最高""约""部分""可能""据称""仅…之一"必须原样保留。
+  典型错误：把"up to 2x faster"写成"快两倍"；把"部分靠电"写成"靠电"；把"大约4个月"写成"仅4个月"。
+- **禁止因果倒置与程度改写**：原文说"增长平稳可预期"，不能写成"增长乏力"。
+- **实体必须出自原文**：公司名、产品名、模型名、金额、日期，原文没出现的就一个字都不要写。
+- **不下结论**：结尾不要自行升华（如"XX生态的拼图又补了一块""任务范围又扩了一圈"）。
+  写不下的信息宁可不写，也不要自己补。
 
 绝对禁止出现的AI腔（出现任何一个就重写）：
 - "此举旨在" "标志着" "被视为" "引发业界" "值得关注的是" "具有重要意义"
@@ -57,16 +73,20 @@ SUMMARIZE_SYSTEM = """你是一名资深AI科技记者，在科技媒体干了�
 - 以"该产品/该技术/该公司"开头的句式
 - 任何"赋能""助力""打造""引领"等公关稿高频词
 
-标题要求：
-- 20字以内，把最关键的信息放前面
+标题要求（最重要）：
+- 必须是**完整、自洽的中文短句**，20-28字
+- **严禁把原标题机械截断**——宁可重新组织成一个更短的完句，也绝不能留下半截话
+- 截断的标题一律视为不合格，例如"作家工会诉OpenAI侵权案解封新"、"围观AI智"、"这种产"这种
+  以半个词收尾的都是错的
+- 正确做法：删掉次要信息，保留主谓宾完整的短句，如"作家工会诉OpenAI案关键文件解封"
 - 不用"震惊""重磅""突破"等夸张词
 - 英文标题中文化，但保留品牌名英文（如GPT、Claude）
 - 好标题例子："OpenAI开放GPT-5 API，开发者免费调用3个月"
-- 差标题例子："OpenAI又有大动作！GPT-5重磅来袭"
+- 差标题例子："OpenAI又有大动作！GPT-5重磅来袭"、"OpenAI开放GPT-5 API，开发者免"
 
 任务：
-1. 将标题翻译为中文（英文标题），控制在20字以内
-2. 将摘要改写为90-160字的中文摘要
+1. 将标题改写为完整的中文短标题（必须是完整短句，绝不截断成半句话），控制在20-28字
+2. 将摘要改写为90-150字的中文摘要
 3. 为每条新闻生成2-3个标签（如：#OpenAI #产品发布 #大模型）
 4. 判断该条目所属的分类
 
@@ -86,11 +106,42 @@ SUMMARIZE_USER_TEMPLATE = """请处理以下新闻条目：
 
 请输出JSON：
 {{
-  "cn_title": "中文标题，20字以内，吸睛但不夸大",
-  "cn_summary": "中文摘要，90-160字，信息密度高，包含关键信息",
+  "cn_title": "完整通顺的中文标题，20-28字，必须是完整短句、不得截断成半句话",
+  "cn_summary": "中文摘要，90-150字，信息密度高，包含关键信息",
   "tags": ["标签1", "标签2", "标签3"],
   "category": "分类key"
 }}"""
+
+
+def parse_llm_json(result: str) -> Optional[Dict]:
+    """Parse a JSON object out of an LLM reply.
+
+    模型经常在 JSON 外包 ```json 围栏、前后加说明文字，甚至输出被截断。
+    这里先剥围栏，再抓第一个完整的 {...} 块，最后才放弃。
+    """
+    if not result:
+        return None
+    clean = re.sub(r'```json\s*', '', result)
+    clean = re.sub(r'```\s*', '', clean).strip()
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        pass
+    # 退一步：抓取第一个 JSON 对象（模型常在前后加多余文字）
+    depth, start = 0, -1
+    for i, ch in enumerate(clean):
+        if ch == '{':
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0 and start >= 0:
+                try:
+                    return json.loads(clean[start:i + 1])
+                except json.JSONDecodeError:
+                    start = -1  # 这一段不行，继续找下一个
+    return None
 
 
 def summarize_item(item: Dict) -> Dict:
@@ -116,30 +167,34 @@ def summarize_item(item: Dict) -> Dict:
 
     if not result:
         return {
-            'cn_title': item['title'][:20],
-            'cn_summary': item.get('summary', '')[:160],
+            'cn_title': trim_title(item['title']),
+            'cn_summary': truncate_text(item.get('summary', ''), 160),
             'tags': [],
             'category': item.get('category_hint', '行业动态'),
         }
 
-    try:
-        clean = re.sub(r'```json\s*', '', result)
-        clean = re.sub(r'```\s*', '', clean).strip()
-        parsed = json.loads(clean)
+    parsed = parse_llm_json(result)
+    if parsed is None:
+        # 解析失败就重试一次；绝不把模型原始输出（含 ```json 围栏）当成摘要写进日报
+        print(f"  [!] Failed to parse LLM response for '{item['title'][:30]}...', retrying")
+        result = llm_chat(SUMMARIZE_SYSTEM, user_prompt, temperature=0.2)
+        parsed = parse_llm_json(result)
+
+    if parsed is None:
+        print(f"  [x] Give up on '{item['title'][:30]}...', fall back to source summary")
         return {
-            'cn_title': parsed.get('cn_title', item['title'])[:20],
-            'cn_summary': parsed.get('cn_summary', '')[:200],
-            'tags': parsed.get('tags', [])[:3],
-            'category': parsed.get('category', 'headline'),
-        }
-    except (json.JSONDecodeError, KeyError) as e:
-        print(f"  [!] Failed to parse LLM response for '{item['title'][:30]}...': {e}")
-        return {
-            'cn_title': item['title'][:20],
-            'cn_summary': result[:160] if result else item.get('summary', '')[:160],
+            'cn_title': trim_title(item['title']),
+            'cn_summary': truncate_text(item.get('summary', ''), 160),
             'tags': [],
             'category': item.get('category_hint', '行业动态'),
         }
+
+    return {
+        'cn_title': trim_title(parsed.get('cn_title', item['title'])),
+        'cn_summary': truncate_text(parsed.get('cn_summary', ''), 160),
+        'tags': parsed.get('tags', [])[:3],
+        'category': parsed.get('category', 'headline'),
+    }
 
 
 PAPER_SYSTEM = """你是一名AI学术编辑，负责为公众号读者解读arXiv论文。
@@ -163,13 +218,13 @@ PAPER_USER_TEMPLATE = """请解读以下论文：
 
 请输出JSON：
 {{
-  "cn_title": "论文中文标题，20字以内",
+  "cn_title": "论文中文标题，20-28字，必须是完整短句、不得截断",
   "one_liner": "一句话总结，30字以内，用通俗语言",
   "key_points": ["核心要点1（20字以内）", "核心要点2", "核心要点3"],
   "plain_explanation": "通俗解读，100-150字，让非专业读者也能理解。用类比和日常语言。",
   "why_care": "为什么值得关注，50-80字。说明对现实世界的影响。",
   "tags": ["标签1", "标签2"],
-  "cn_summary": "综合摘要，90-160字，包含论文核心贡献和创新点",
+  "cn_summary": "综合摘要，90-150字，包含论文核心贡献和创新点",
   "category": "paper"
 }}"""
 
@@ -190,13 +245,11 @@ def summarize_paper(item: Dict) -> Dict:
     if not result:
         return summarize_item(item)
 
-    try:
-        clean = re.sub(r'```json\s*', '', result)
-        clean = re.sub(r'```\s*', '', clean).strip()
-        parsed = json.loads(clean)
+    parsed = parse_llm_json(result)
+    if parsed is not None:
         return {
-            'cn_title': parsed.get('cn_title', item['title'])[:25],
-            'cn_summary': parsed.get('cn_summary', '')[:200],
+            'cn_title': trim_title(parsed.get('cn_title', item['title'])),
+            'cn_summary': truncate_text(parsed.get('cn_summary', ''), 160),
             'tags': parsed.get('tags', [])[:3],
             'category': 'paper',
             'one_liner': parsed.get('one_liner', ''),
@@ -204,8 +257,7 @@ def summarize_paper(item: Dict) -> Dict:
             'plain_explanation': parsed.get('plain_explanation', ''),
             'why_care': parsed.get('why_care', ''),
         }
-    except (json.JSONDecodeError, KeyError):
-        return summarize_item(item)
+    return summarize_item(item)
 
 
 # === Batch curation (enhanced with scoring context) ===

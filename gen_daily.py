@@ -11,7 +11,10 @@ import json
 import argparse
 from datetime import datetime
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _ROOT)
+# src/ 内模块之间用裸 import（utils.text / processors.xxx），src/ 需在 sys.path 上
+sys.path.insert(0, os.path.join(_ROOT, 'src'))
 
 from src.publishers.html_publisher import generate_html, save_html
 from src.utils.validator import print_report
