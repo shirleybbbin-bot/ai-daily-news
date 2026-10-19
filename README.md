@@ -22,6 +22,11 @@ python3 build_daily.py --no-calibrate   # 跳过校准（快速出稿）
 python3 build_daily.py --no-editor-notes # 跳过前5条编辑判断
 python3 build_daily.py --llm-probe      # 只探活 LLM 端点（30秒诊断，不采集不出稿）
 python3 build_daily.py --allow-llm-failure # LLM 不可用时仍出降级稿（应急）
+
+python3 qc_daily.py                       # 离线质检 data/today_data.json（不联网、不采集）
+python3 qc_daily.py --date 2026-10-19 --json   # 指定日期 + 机器可读结果
+python3 qc_daily.py --fix-trace           # 把"该模型/该功能"改成"这款模型/这一功能"并写回
+python3 gen_daily.py data/today_data.json --date 2026-10-19  # 改完 JSON 重新出 HTML
 ```
 
 ## LLM 端点探活与降级闸门
@@ -80,6 +85,47 @@ LLM_FALLBACK_MODEL=gpt-4o-mini
 | `allow_llm_failure` | LLM 不可用时仍出降级稿（应急） |
 
 排查顺序建议：先用 `llm_probe_only` 确认端点，再跑完整流程。
+
+## 离线质检（qc_daily.py）
+
+不联网、不采集，只判断 `data/today_data.json` 能不能交付。退出码 0=通过（可能带 ⚠️），
+1=有 ❌ 硬伤，2=数据文件不存在。阈值都在 `config/settings.yaml` 的 `quality_control` 下。
+
+| 检查项 | 级别 | 说明 |
+| --- | --- | --- |
+| 条目数 / 摘要 90-160 字 / 标签数 | ❌/⚠️ | 读 `pipeline.min_items`、`summary_min_chars` 等 |
+| 重复标题、重复链接 | ❌ | 多源同事件应已合并成单卡片 |
+| 英文标题未中文化 | ❌ | `lang=en` 与 Paper 都要中文标题 |
+| 来源多样性 / 单源上限 | ❌/⚠️ | `min_sources`、`max_items_per_source` |
+| 分类覆盖 | ⚠️ | 用发布器同一套归一化，缺 `required_categories` 里的项会列出 |
+| 配图率 | ⚠️ | `min_image_ratio`（默认 0.5），图取原文 og:image |
+| **时效性** | ❌ | 有日期的条目全落在 `max_item_age_hours`（默认 36h）外即判定为旧数据，专治"拿昨天的稿当今天发" |
+| **AIbase 前 5** | ❌/⚠️ | `require_aibase_top5` 之前在 settings 里是死配置，现在真的会查 |
+| 前 5 条 editor_note | ⚠️ | 模板靠它渲染「洞察：」块 |
+| **反 AI 腔** | ⚠️ | 套话黑名单 + "该X"书面指代计数，`--fix-trace` 可批量改 |
+| LLM 降级率 | ❌ | 超过 `max_llm_fallback_rate` 判不可交付 |
+| 登录页/跳转页脏条目 | ❌ | 复用 `dedup.is_junk_item` |
+
+报告里还会打印时效性明细、配图率、编辑判断覆盖、`llm_fallback` 条目与 `fact_check`
+标记项（区分"硬问题"和"仅 URL 校验通过"）。`build_daily.py` 出稿前跑的是同一套检查。
+
+## 本地心跳（Codex 定时任务）
+
+云端 Actions 是唯一的采集与生成执行器。本地 Codex 心跳每天 08:00 触发，
+沙箱只读且禁网，因此它只承担三件事：
+
+1. 校验云端产物是否到位（`data/ai-daily-<今天>.html` + `today_data.json`）；
+   缺失就汇报，并给出 `git pull` / `gh run view --log-failed` 等命令与退出码解释
+2. 离线跑质量门槛（条数、分类覆盖、来源多样性、配图率、去重、AI 腔），
+   润色与一致性校对由模型本身完成，不调外部 API
+3. 重新生成 HTML，提醒 8:30 前审核后发布到公众号
+
+心跳配置随仓库保存：`docs/automation-heartbeat.toml`。安装或更新到本地：
+
+    cp ~/.codex/automations/ai/automation.toml ~/.codex/automations/ai/automation.toml.bak-$(date +%Y%m%d)
+    cp docs/automation-heartbeat.toml ~/.codex/automations/ai/automation.toml
+
+`~/.codex/` 对沙箱只读，替换后需重启 Codex 才会加载新配置。
 
 ## 数据源
 

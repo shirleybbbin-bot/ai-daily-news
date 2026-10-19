@@ -20,6 +20,10 @@ llm:
   # OpenAI-compatible endpoint
   base_url: https://open.bigmodel.cn/api/paas/v4
 
+# 前 N 条重点新闻由 LLM 写"编辑判断"，模板渲染成卡片里的「洞察：」块
+editor_note:
+  top_n: 5
+
 # 校准/质检规则
 quality_control:
   require_source_diversity: true   # 来源至少覆盖 4 个不同站点
@@ -30,6 +34,22 @@ quality_control:
   check_no_english_titles: true   # 英文标题必须中文化
   check_tags_count: true
   max_items_per_source: 5         # 单一来源最多5条
+  # 以下门槛供 qc_daily.py / print_report 使用（❌ 才算不通过，⚠️ 只提示）
+  min_image_ratio: 0.5            # 配图率下限，图片取原文 og:image
+  max_item_age_hours: 36          # pub_date 超过此小时数视为过期（拦住拿旧数据当今天日报）
+  min_fresh_ratio: 0.6            # 时效窗口内条目占比下限
+  min_aibase_items: 5             # AIbase 关注度前5 是硬要求
+  required_categories:            # 缺项只告警，但要在汇报里写明
+    - headline
+    - investment
+    - policy
+    - technology
+    - product
+    - bigtech
+    - paper
+    - opensource
+  check_editor_notes: true        # 前 editor_note.top_n 条要有编辑判断
+  check_anti_cliche: true         # 反 AI 腔套话硬校验
   # LLM 静默降级闸门：走"原文摘要兜底"的条目占比超过此值即判定不可交付，
   # 在生成 HTML / 发布之前退出（exit 3），让 CI 变红而不是悄悄发一版废稿。
   # 兜底条目的特征：标题没中文化、tags 为空。加 --allow-llm-failure 可强制出稿。
