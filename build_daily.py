@@ -32,7 +32,9 @@ from src.collectors.arxiv_collector import collect_arxiv
 from src.collectors.github_trending_collector import collect_github_trending
 from src.processors.dedup import deduplicate, cross_day_dedup
 from src.processors.categorizer import assign_categories
-from src.processors.summarizer import summarize_item, summarize_paper, curate_items, llm_chat
+from src.processors.summarizer import (summarize_item, summarize_paper, curate_items,
+                                       llm_chat, llm_preflight, list_endpoints,
+                                       get_endpoint)
 from src.processors.scorer import rank_items, select_top_items
 from src.processors.calibrator import calibrate_batch, calibrate_paper, editor_notes_batch
 from src.processors.fact_checker import fact_check_batch
@@ -161,7 +163,13 @@ def process_and_summarize(items: list, config: dict, skip_calibration: bool = Fa
             item['cn_summary'] = item.get('summary', '')[:160]
             item['tags'] = []
             item['category'] = item.get('category_hint', 'headline')
+            item['llm_fallback'] = True
             summarized.append(item)
+
+    fallback_n = sum(1 for it in summarized if it.get('llm_fallback'))
+    if fallback_n:
+        print(f"  ⚠️ {fallback_n}/{len(summarized)} 条走了原文摘要兜底"
+              f"（LLM 没返回可解析结果，这些条目标题不会中文化、标签为空）")
 
     # Step 3: Assign categories
     print("\n🏷️ === 分类 ===")
@@ -288,6 +296,10 @@ def main():
     parser.add_argument('--publish', action='store_true', help='发布到微信公众号草稿箱')
     parser.add_argument('--no-calibrate', action='store_true', help='跳过自校准（快速出稿）')
     parser.add_argument('--no-editor-notes', action='store_true', help='跳过前5条的编辑判断')
+    parser.add_argument('--allow-llm-failure', action='store_true',
+                        help='LLM 探活失败或兜底比例过高时仍然出稿（默认直接失败退出）')
+    parser.add_argument('--llm-probe', action='store_true',
+                        help='只做 LLM 端点探活并退出（诊断用，不采集不生成）')
     parser.add_argument('--date', type=str, default=None, help='指定日期 YYYY-MM-DD')
     args = parser.parse_args()
 
@@ -303,6 +315,33 @@ def main():
     print(f"═══════════════════════════════════════════════════════")
     print(f"  📰 AI 资讯日报生成器 — {date_str}")
     print(f"═══════════════════════════════════════════════════════\n")
+
+    # Step 0: LLM 探活 —— 放在采集之前，端点不可用就别浪费十几分钟抓数据
+    print("🔌 === LLM 端点探活 ===")
+    for ep in list_endpoints():
+        key_state = 'has key' if ep['api_key'] else 'NO KEY'
+        print(f"   [{ep['name']}] {ep['base_url']} | model={ep['model']} | {key_state}")
+    llm_ok, llm_detail = llm_preflight()
+    for line in llm_detail.split('；'):
+        if line.strip():
+            print(f"   {line.strip()}")
+    if llm_ok:
+        print(f"🟢 探活通过，本次使用: {get_endpoint()['base_url']} / {get_endpoint()['model']}")
+    else:
+        print("🔴 探活失败：所有候选端点都不可用")
+    if args.llm_probe:
+        print(f"\n--llm-probe：只诊断，不采集不生成。结果 = {'可用' if llm_ok else '不可用'}")
+        sys.exit(0 if llm_ok else 2)
+    if not llm_ok:
+        if not args.allow_llm_failure:
+            print("   继续跑只会得到一版没中文化、没标签的废稿，已中止。")
+            print("   检查 LLM_BASE_URL / LLM_API_KEY / LLM_MODEL 是否指向当前环境可达的端点")
+            print("   （本地 .env 里的 127.0.0.1:15721 只在 Codex 会话内有效；")
+            print("     GitHub runner 上必须是公网可达地址，内网域名到不了）。")
+            print("   备用端点用 LLM_FALLBACK_BASE_URL / LLM_FALLBACK_API_KEY / LLM_FALLBACK_MODEL 配置。")
+            print("   确认要出降级稿就加 --allow-llm-failure。")
+            sys.exit(2)
+        print("   --allow-llm-failure 已指定，按降级模式继续。")
 
     # Step 1: Collect
     raw_data_path = os.path.join(output_dir, 'raw_collected.json')
@@ -389,6 +428,10 @@ def main():
             {'step': 'fact_check', 'status': 'done'},
         ],
         'total_items': len(items),
+        'llm_fallback': {
+            'count': sum(1 for i in items if i.get('llm_fallback')),
+            'rate': round(sum(1 for i in items if i.get('llm_fallback')) / max(len(items), 1), 3),
+        },
         'signal_grades': {
             'heavy': len([i for i in items if i.get('signal_grade') == '重磅']),
             'noticeable': len([i for i in items if i.get('signal_grade') == '值得关注']),
@@ -407,6 +450,17 @@ def main():
     if not passed and not args.dry_run:
         print("⚠️ 质检未通过！建议检查 today_data.json 后重新运行 gen_daily.py")
         print("  使用 --dry-run 可跳过发布步骤")
+
+    # 兜底比例过高说明 LLM 这一路是坏的，稿子不可交付；
+    # 在生成 HTML 和发布之前退出，让 CI 变红而不是悄悄发一版废稿
+    fb = quality_report['llm_fallback']
+    max_fb_rate = settings.get('quality_control', {}).get('max_llm_fallback_rate', 0.3)
+    if fb['rate'] > max_fb_rate and not args.allow_llm_failure:
+        print(f"\n🔴 LLM 兜底比例 {fb['rate']:.0%}（{fb['count']}/{len(items)}）"
+              f"超过阈值 {max_fb_rate:.0%}，判定为不可交付，已中止。")
+        print(f"   数据留在 {today_data_path}，排查完 LLM 端点后重跑。")
+        print("   确实要出降级稿就加 --allow-llm-failure。")
+        sys.exit(3)
 
     # Step 5: Generate HTML
     print("\n📄 === 生成 HTML ===")

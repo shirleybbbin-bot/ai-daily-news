@@ -30,6 +30,10 @@ quality_control:
   check_no_english_titles: true   # 英文标题必须中文化
   check_tags_count: true
   max_items_per_source: 5         # 单一来源最多5条
+  # LLM 静默降级闸门：走"原文摘要兜底"的条目占比超过此值即判定不可交付，
+  # 在生成 HTML / 发布之前退出（exit 3），让 CI 变红而不是悄悄发一版废稿。
+  # 兜底条目的特征：标题没中文化、tags 为空。加 --allow-llm-failure 可强制出稿。
+  max_llm_fallback_rate: 0.3
 
 output:
   dir: data

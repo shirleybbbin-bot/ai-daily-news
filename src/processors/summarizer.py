@@ -3,44 +3,147 @@ Enhanced with multi-step prompt strategy learned from CloudFlare-AI-Insight-Dail
 import os
 import json
 import re
-from typing import Dict, List, Optional
+import time
+import random
+from typing import Dict, List, Optional, Tuple
 from openai import OpenAI
 from utils.text import trim_title, truncate_text
 
 
-def get_llm_client() -> OpenAI:
+_DEFAULT_BASE_URL = 'https://open.bigmodel.cn/api/paas/v4'
+_DEFAULT_MODEL = 'glm-4.5'
+
+# 探活选中的端点。None 表示还没探过，此时按主端点走（保持旧行为）。
+_active_endpoint: Optional[Dict[str, str]] = None
+
+
+def list_endpoints() -> List[Dict[str, str]]:
+    """按优先级列出候选 LLM 端点。
+
+    云端 CI 里 secrets.LLM_BASE_URL 可能指向公司内网地址，GitHub runner 根本到不了；
+    而 llm_chat 会把连接异常吞成空串，整条流水线静默退化成"原文摘要兜底"。
+    所以支持一组备用端点：LLM_FALLBACK_BASE_URL / LLM_FALLBACK_API_KEY / LLM_FALLBACK_MODEL。
+    GitHub Actions 里备用端点直接用 GitHub Models（GITHUB_TOKEN 就够，不需要额外密钥）。
+    """
+    endpoints = [{
+        'name': 'primary',
+        'base_url': (os.environ.get('LLM_BASE_URL') or _DEFAULT_BASE_URL).strip(),
+        'api_key': (os.environ.get('LLM_API_KEY') or '').strip(),
+        'model': (os.environ.get('LLM_MODEL') or _DEFAULT_MODEL).strip(),
+    }]
+    fb_url = (os.environ.get('LLM_FALLBACK_BASE_URL') or '').strip()
+    fb_key = (os.environ.get('LLM_FALLBACK_API_KEY') or '').strip()
+    if fb_url and fb_key:
+        endpoints.append({
+            'name': 'fallback',
+            'base_url': fb_url,
+            'api_key': fb_key,
+            'model': (os.environ.get('LLM_FALLBACK_MODEL') or _DEFAULT_MODEL).strip(),
+        })
+    return endpoints
+
+
+def get_endpoint() -> Dict[str, str]:
+    """当前生效的端点。探活成功后由 llm_preflight 设置。"""
+    global _active_endpoint
+    if _active_endpoint is None:
+        _active_endpoint = list_endpoints()[0]
+    return _active_endpoint
+
+
+def get_llm_client(endpoint: Optional[Dict[str, str]] = None,
+                   timeout: Optional[float] = None) -> OpenAI:
     """Create OpenAI-compatible client for GLM API."""
-    # timeout 必须显式设置：SDK 默认 600s，单条卡住会拖死整条流水线
-    # max_retries=0：失败交给上层 except 处理，避免 SDK 内部重试叠加放大等待时间
+    ep = endpoint or get_endpoint()
+    # timeout 必须显式设置：SDK 默认 600s，单条卡住会拖死整条流水线。
+    # 探活走更短的 timeout，端点全挂时不用白等两轮。
+    # max_retries 是 SDK 层重试，llm_chat 的指数退避是应用层重试，两者互补。
     return OpenAI(
-        api_key=os.environ.get('LLM_API_KEY', ''),
-        base_url=os.environ.get('LLM_BASE_URL', 'https://open.bigmodel.cn/api/paas/v4'),
-        timeout=float(os.environ.get('LLM_TIMEOUT', '120')),
+        api_key=ep['api_key'],
+        base_url=ep['base_url'],
+        timeout=float(timeout if timeout is not None else os.environ.get('LLM_TIMEOUT', '120')),
         max_retries=int(os.environ.get('LLM_MAX_RETRIES', '1')),
     )
 
 
 def get_model() -> str:
-    return os.environ.get('LLM_MODEL', 'glm-4.5')
+    return get_endpoint()['model']
 
 
-def llm_chat(system_prompt: str, user_prompt: str, temperature: float = 0.3) -> str:
-    """Call LLM and return text response."""
+def llm_chat(system_prompt: str, user_prompt: str, temperature: float = 0.3,
+             attempts: Optional[int] = None) -> str:
+    """Call LLM and return text response.
+
+    单次抖动（429 限流、瞬时连接重置、返回空内容）以前会直接把这条打成
+    "原文摘要兜底"，标题不中文化、标签为空。这里加指数退避重试，
+    把偶发故障和端点彻底不可用区分开——后者由 llm_preflight 提前拦掉。
+    """
+    max_attempts = int(attempts or os.environ.get('LLM_CHAT_ATTEMPTS', '3'))
     client = get_llm_client()
+    last_error = ''
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = client.chat.completions.create(
+                model=get_model(),
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=temperature,
+                max_tokens=4096,
+            )
+            content = (resp.choices[0].message.content or '').strip()
+            if content:
+                return content
+            last_error = '返回空内容'
+        except Exception as e:
+            last_error = f'{type(e).__name__}: {e}'
+        if attempt < max_attempts:
+            delay = min(2 ** attempt, 8) + random.uniform(0, 1)
+            print(f"  [!] LLM 第 {attempt}/{max_attempts} 次失败（{last_error}），"
+                  f"{delay:.1f}s 后重试")
+            time.sleep(delay)
+    print(f"  [!] LLM call failed after {max_attempts} attempts: {last_error}")
+    return ""
+
+
+def _probe(endpoint: Dict[str, str], timeout: float = 20.0) -> Tuple[bool, str]:
+    """对单个端点发一次最小请求，确认真的能出字。"""
+    label = f"{endpoint['base_url']} / {endpoint['model']}"
+    if not endpoint['api_key']:
+        return False, f"{label}：API key 为空"
     try:
-        resp = client.chat.completions.create(
-            model=get_model(),
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=temperature,
-            max_tokens=4096,
+        resp = get_llm_client(endpoint, timeout=timeout).chat.completions.create(
+            model=endpoint['model'],
+            messages=[{"role": "user", "content": "ping"}],
+            temperature=0,
+            max_tokens=8,
         )
-        return resp.choices[0].message.content.strip()
+        if not (resp.choices[0].message.content or '').strip():
+            return False, f"{label}：连通但返回空内容"
+        return True, f"{label}：可用"
     except Exception as e:
-        print(f"  [!] LLM call failed: {e}")
-        return ""
+        return False, f"{label}：不可达（{type(e).__name__}: {e}）"
+
+
+def llm_preflight(timeout: float = 20.0) -> Tuple[bool, str]:
+    """按优先级探活所有候选端点，选中第一个可用的。
+
+    返回 (是否可用, 详情)。详情里会写明用的是主端点还是备用端点；
+    全挂时把每个端点的失败原因都列出来，方便一眼定位是密钥问题还是网络问题。
+    """
+    global _active_endpoint
+    candidates = list_endpoints()
+    details = []
+    for ep in candidates:
+        ok, detail = _probe(ep, timeout=timeout)
+        tag = '' if ep['name'] == 'primary' else '（备用端点）'
+        details.append(f"[{ep['name']}]{tag} {detail}")
+        if ok:
+            _active_endpoint = ep
+            return True, '；'.join(details)
+    _active_endpoint = candidates[0]
+    return False, '；'.join(details)
 
 
 # === Enhanced System Prompts (learned from CloudFlare project) ===
@@ -171,6 +274,7 @@ def summarize_item(item: Dict) -> Dict:
             'cn_summary': truncate_text(item.get('summary', ''), 160),
             'tags': [],
             'category': item.get('category_hint', '行业动态'),
+            'llm_fallback': True,
         }
 
     parsed = parse_llm_json(result)
@@ -187,6 +291,7 @@ def summarize_item(item: Dict) -> Dict:
             'cn_summary': truncate_text(item.get('summary', ''), 160),
             'tags': [],
             'category': item.get('category_hint', '行业动态'),
+            'llm_fallback': True,
         }
 
     return {
@@ -194,6 +299,7 @@ def summarize_item(item: Dict) -> Dict:
         'cn_summary': truncate_text(parsed.get('cn_summary', ''), 160),
         'tags': parsed.get('tags', [])[:3],
         'category': parsed.get('category', 'headline'),
+        'llm_fallback': False,
     }
 
 
@@ -256,6 +362,7 @@ def summarize_paper(item: Dict) -> Dict:
             'key_points': parsed.get('key_points', []),
             'plain_explanation': parsed.get('plain_explanation', ''),
             'why_care': parsed.get('why_care', ''),
+            'llm_fallback': False,
         }
     return summarize_item(item)
 

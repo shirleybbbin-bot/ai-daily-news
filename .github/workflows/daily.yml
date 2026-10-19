@@ -6,6 +6,10 @@ on:
     - cron: '30 23 * * *'
   workflow_dispatch:
     inputs:
+      llm_probe_only:
+        description: '只探活 LLM 端点（约30秒诊断，不采集不出稿）'
+        type: boolean
+        default: false
       dry_run:
         description: '只生成预览，不发布'
         type: boolean
@@ -18,11 +22,19 @@ on:
         description: '跳过校准+一致性自检'
         type: boolean
         default: false
+      allow_llm_failure:
+        description: 'LLM 不可用时仍出降级稿（应急用）'
+        type: boolean
+        default: false
 
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      # 必须显式声明：新仓库默认 contents 只读，
+      # 之前 push 被 `|| echo` 吞掉 403，云端出了稿却推不回仓库
+      contents: write
 
     steps:
       - name: Checkout
@@ -42,11 +54,21 @@ jobs:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          # 备用端点：主端点是公司内网 one-api，GitHub runner 到不了时自动切过来。
+          # 默认走 GitHub Models，密钥用 GITHUB_TOKEN，不需要额外申请。
+          # 想换端点/模型，在仓库 Settings → Variables 里设 LLM_FALLBACK_BASE_URL / LLM_FALLBACK_MODEL 即可。
+          LLM_FALLBACK_BASE_URL: ${{ vars.LLM_FALLBACK_BASE_URL || 'https://models.inference.ai.azure.com' }}
+          LLM_FALLBACK_API_KEY: ${{ secrets.LLM_FALLBACK_API_KEY || secrets.GITHUB_TOKEN }}
+          LLM_FALLBACK_MODEL: ${{ vars.LLM_FALLBACK_MODEL || 'gpt-4o-mini' }}
           WECHAT_APP_ID: ${{ secrets.WECHAT_APP_ID }}
           WECHAT_APP_SECRET: ${{ secrets.WECHAT_APP_SECRET }}
           # src/ 内模块用裸 import（utils.xxx / processors.xxx），必须让 src 在导入路径上
           PYTHONPATH: ${{ github.workspace }}/src
         run: |
+          if [ "${{ github.event.inputs.llm_probe_only }}" = "true" ]; then
+            python3 build_daily.py --llm-probe
+            exit $?
+          fi
           FLAGS=""
           if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
             FLAGS="$FLAGS --dry-run"
@@ -57,9 +79,13 @@ jobs:
           if [ "${{ github.event.inputs.no_calibrate }}" = "true" ]; then
             FLAGS="$FLAGS --no-calibrate"
           fi
+          if [ "${{ github.event.inputs.allow_llm_failure }}" = "true" ]; then
+            FLAGS="$FLAGS --allow-llm-failure"
+          fi
           python3 build_daily.py $FLAGS
 
       - name: Upload artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ai-daily-report-${{ github.run_id }}
@@ -69,11 +95,20 @@ jobs:
             data/quality_report.json
             data/raw_collected.json
           retention-days: 30
+          if-no-files-found: warn
 
       - name: Commit report to repo
+        if: ${{ github.event.inputs.llm_probe_only != 'true' }}
         run: |
           git config --global user.name "AI Daily Bot"
           git config --global user.email "actions@github.com"
-          git add data/ai-daily-*.html data/today_data.json data/quality_report.json 2>/dev/null || true
-          git commit -m "📰 AI Daily Report $(date -u +%Y-%m-%d)" || echo "No changes to commit"
-          git push || echo "No changes to push"
+          git add data/today_data.json data/quality_report.json 2>/dev/null || true
+          git add data/ai-daily-*.html 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "没有新产物需要提交"
+            exit 0
+          fi
+          git commit -m "📰 AI Daily Report $(date -u +%Y-%m-%d)"
+          # checkout 可能处于 detached HEAD，显式推到 main；
+          # push 失败要让 job 变红，不能再用 || echo 吞掉
+          git push origin HEAD:main
