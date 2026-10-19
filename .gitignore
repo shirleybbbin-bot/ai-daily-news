@@ -6,6 +6,10 @@ __pycache__/
 data/raw_collected.json
 data/previous_titles.json
 data/quality_report.json
+# scripts/sync_and_push.sh 挪走撞车产物时的备份目录
+data/.local-backup/
+# 手工改稿留下的备份（*.bak / *.bak-pre-xxx / *.bak2 …）
+*.bak*
 outputs/
 .venv/
 .workbuddy/

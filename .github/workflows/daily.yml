@@ -102,13 +102,31 @@ jobs:
         run: |
           git config --global user.name "AI Daily Bot"
           git config --global user.email "actions@github.com"
-          git add data/today_data.json data/quality_report.json 2>/dev/null || true
-          git add data/ai-daily-*.html 2>/dev/null || true
+          # quality_report.json / raw_collected.json 是 .gitignore 里的本地产物，
+          # 混在同一条 git add 里会让整条命令返回 1（虽被 || true 吞掉但很难排查），
+          # 它们已经由上面的 Upload artifacts 保存 30 天，这里只提交要长期留档的稿子。
+          git add data/today_data.json || true
+          git add data/ai-daily-*.html || true
           if git diff --cached --quiet; then
             echo "没有新产物需要提交"
             exit 0
           fi
           git commit -m "📰 AI Daily Report $(date -u +%Y-%m-%d)"
-          # checkout 可能处于 detached HEAD，显式推到 main；
-          # push 失败要让 job 变红，不能再用 || echo 吞掉
-          git push origin HEAD:main
+          # checkout 处于 detached HEAD，显式推到 main；push 失败要让 job 变红，不能用 || echo 吞掉。
+          # 本地在这期间 push 过代码时，直推会 non-fast-forward 被拒 → 当天稿子只能去 Artifacts 捞。
+          # 所以先 fetch+rebase 再推，重试 3 次；rebase 真冲突才失败，并明确告诉人去 Artifacts 下载。
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "✅ 产物已推回 main"
+              exit 0
+            fi
+            echo "⚠️ push 被拒（第 ${attempt} 次），拉取远端更新后重试"
+            git fetch origin main
+            if ! git rebase origin/main; then
+              git rebase --abort || true
+              echo "❌ rebase 冲突，放弃推送。当天产物请从本次 run 的 Artifacts 下载。"
+              exit 1
+            fi
+          done
+          echo "❌ 重试 3 次仍推送失败。当天产物请从本次 run 的 Artifacts 下载。"
+          exit 1

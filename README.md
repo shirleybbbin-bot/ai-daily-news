@@ -86,6 +86,26 @@ LLM_FALLBACK_MODEL=gpt-4o-mini
 
 排查顺序建议：先用 `llm_probe_only` 确认端点，再跑完整流程。
 
+## 本地 ↔ 云端同步
+
+云端每天把 `data/today_data.json` 和 `data/ai-daily-*.html` 提交回 `main`，本地也会生成
+同名文件。于是两个方向都会卡：
+
+- `git pull` 报 `untracked working tree files would be overwritten by merge`
+- `git push` 报 non-fast-forward，云端那次 push 被拒，当天稿子只能去 Artifacts 捞
+
+用脚本代替手敲，它按固定顺序处理：
+
+    ./scripts/sync_and_push.sh              # 实际执行
+    ./scripts/sync_and_push.sh --dry-run    # 只报告会发生什么
+
+流程：拦住未提交改动 → `fetch` → 把与云端撞车的本地未跟踪产物挪进
+`data/.local-backup/<时间戳>/`（已 gitignore，不会被误提交）→ `rebase` → `push`。
+rebase 真冲突时会停下来并打印 `git rebase --abort` 的退路，不会留下半吊子状态。
+
+云端侧同样做了加固：push 被拒时自动 `fetch` + `rebase` 重试 3 次，仍失败才让 job 变红，
+并明确提示去 Artifacts 下载当天产物。
+
 ## 离线质检（qc_daily.py）
 
 不联网、不采集，只判断 `data/today_data.json` 能不能交付。退出码 0=通过（可能带 ⚠️），
