@@ -38,6 +38,11 @@ CATEGORY_ALIAS = {
     '头条': 'headline',
 }
 
+# 采集器的 category_hint 写的就是分区中文名（"大V观点""开源热榜"…），
+# LLM 摘要失败走兜底时会把中文名原样带进 category。用 SECTION_META 反查，
+# 这样任何中文分区名都能落回正确的英文键，不必逐条往别名表里补。
+CATEGORY_NAME_TO_KEY = {meta['name']: key for key, meta in SECTION_META.items()}
+
 TOP_N = 5
 
 
@@ -46,7 +51,9 @@ def normalize_category(article: Dict) -> str:
     cat = (article.get('category') or '').strip()
     if cat in SECTION_META:
         return cat
-    return CATEGORY_ALIAS.get(cat, cat)
+    if cat in CATEGORY_ALIAS:
+        return CATEGORY_ALIAS[cat]
+    return CATEGORY_NAME_TO_KEY.get(cat, cat)
 
 
 def build_sections(articles: List[Dict]) -> List[Dict]:

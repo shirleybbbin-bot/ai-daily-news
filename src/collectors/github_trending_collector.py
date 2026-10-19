@@ -6,6 +6,9 @@ from typing import List, Dict, Optional
 from utils.http import fetch_url
 from utils.text import clean_text
 
+# trending 条目的路径只有 owner/repo 这一种合法形状
+_REPO_PATH_RE = re.compile(r'^[\w.-]+/[\w.-]+$')
+
 
 def collect_github_trending(config: Dict) -> List[Dict]:
     """Collect GitHub trending AI/ML repositories.
@@ -79,6 +82,10 @@ def _parse_trending_page(html: str, lang: str) -> List[Dict]:
         # Clean path (remove leading /)
         if repo_path.startswith('/'):
             repo_path = repo_path[1:]
+        # GitHub 偶发把趋势页锚点换成登录跳转（/login?return_to=%2Fowner%2Frepo），
+        # 这类条目既不是仓库，标题也是一串 URL 参数，直接丢掉
+        if not _REPO_PATH_RE.match(repo_path):
+            continue
         full_url = f"https://github.com/{repo_path}"
         repo_name = repo_path
 

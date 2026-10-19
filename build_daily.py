@@ -34,7 +34,7 @@ from src.processors.dedup import deduplicate, cross_day_dedup
 from src.processors.categorizer import assign_categories
 from src.processors.summarizer import summarize_item, summarize_paper, curate_items, llm_chat
 from src.processors.scorer import rank_items, select_top_items
-from src.processors.calibrator import calibrate_batch, calibrate_paper
+from src.processors.calibrator import calibrate_batch, calibrate_paper, editor_notes_batch
 from src.processors.fact_checker import fact_check_batch
 from src.processors.story_merger import merge_stories
 from src.processors.post_merge import post_summarize_merge
@@ -120,7 +120,8 @@ def collect_all(config: dict, lookback_hours: int = 24) -> list:
     return all_items
 
 
-def process_and_summarize(items: list, config: dict, skip_calibration: bool = False) -> list:
+def process_and_summarize(items: list, config: dict, skip_calibration: bool = False,
+                          with_editor_notes: bool = True) -> list:
     """Deduplicate, summarize, categorize, score, curate, and calibrate items."""
     settings = config.get('settings', {})
     qc = settings.get('quality_control', {})
@@ -238,6 +239,17 @@ def process_and_summarize(items: list, config: dict, skip_calibration: bool = Fa
         if len(items) != before:
             items = rank_items(items)
 
+    # Step 7: 编辑判断 —— 模板里的"洞察"块靠 editor_note 渲染，
+    # 这一步独立于自校准，--no-calibrate 快速出稿时也要有
+    if with_editor_notes:
+        top_n = (settings.get('editor_note', {}) or {}).get('top_n', 5)
+        try:
+            items, note_stats = editor_notes_batch(items, top_n=top_n)
+        except Exception as e:
+            print(f"  [!] 编辑判断阶段出错（已忽略）: {e}")
+    else:
+        print("\n⏭️ 跳过编辑判断（--no-editor-notes）")
+
     return items
 
 
@@ -275,6 +287,7 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='只生成预览，不发布')
     parser.add_argument('--publish', action='store_true', help='发布到微信公众号草稿箱')
     parser.add_argument('--no-calibrate', action='store_true', help='跳过自校准（快速出稿）')
+    parser.add_argument('--no-editor-notes', action='store_true', help='跳过前5条的编辑判断')
     parser.add_argument('--date', type=str, default=None, help='指定日期 YYYY-MM-DD')
     args = parser.parse_args()
 
@@ -330,7 +343,8 @@ def main():
                   f"今日稿可能不够丰满，可考虑放宽 source_text.min_chars")
 
     # Step 2: Process & Summarize
-    items = process_and_summarize(items, config, skip_calibration=args.no_calibrate)
+    items = process_and_summarize(items, config, skip_calibration=args.no_calibrate,
+                                  with_editor_notes=not args.no_editor_notes)
 
     # Step 3: Save today_data.json (for manual editing & gen_daily.py)
     today_data_path = os.path.join(output_dir, 'today_data.json')

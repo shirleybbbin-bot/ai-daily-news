@@ -1,6 +1,23 @@
 """Deduplication processor."""
+import re
 from typing import List, Dict
 from utils.text import similarity, extract_domain
+
+# 采集器偶尔抓到登录页／跳转页而不是正文（例如 github.com/login?return_to=...），
+# 这类条目的标题是 URL 片段，进了日报就是脏数据，去重阶段先拦掉
+JUNK_PATH_RE = re.compile(r'/(login|log-in|signin|sign-in|signup|sign-up|register)(/?$|\?|/)')
+JUNK_TITLE_PREFIXES = ('http://', 'https://', 'login?', 'www.', '%2f', '%2F')
+
+
+def is_junk_item(item: Dict) -> bool:
+    """判断条目是否其实是登录页／跳转页而非新闻。"""
+    url = (item.get('url') or '').lower()
+    title = ((item.get('cn_title') or item.get('title') or '')).strip()
+    if JUNK_PATH_RE.search(url) or 'return_to=' in url:
+        return True
+    if title.startswith(JUNK_TITLE_PREFIXES) or 'return_to=' in title:
+        return True
+    return False
 
 
 def deduplicate(items: List[Dict], threshold: float = 0.65) -> List[Dict]:
@@ -11,8 +28,13 @@ def deduplicate(items: List[Dict], threshold: float = 0.65) -> List[Dict]:
     result = []
     seen_urls = set()
     seen_titles = []
+    junk = 0
 
     for item in items:
+        if is_junk_item(item):
+            junk += 1
+            continue
+
         url = item.get('url', '')
         title = item.get('cn_title') or item.get('title', '')
 
@@ -34,7 +56,7 @@ def deduplicate(items: List[Dict], threshold: float = 0.65) -> List[Dict]:
             seen_titles.append(title)
 
     removed = len(items) - len(result)
-    print(f"  [Dedup] {len(items)} → {len(result)} (removed {removed} duplicates)")
+    print(f"  [Dedup] {len(items)} → {len(result)} (removed {removed - junk} duplicates, {junk} junk pages)")
     return result
 
 

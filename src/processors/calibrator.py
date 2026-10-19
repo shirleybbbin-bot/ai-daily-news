@@ -187,3 +187,102 @@ def calibrate_paper(item: Dict) -> Dict:
         return item
     except (json.JSONDecodeError, KeyError):
         return item
+
+
+EDITOR_NOTE_SYSTEM = """你是AI资讯日报的主编，为当天的重点新闻写"编辑判断"。
+读者是产品、模型和工程团队的管理层。他们不需要再读一遍摘要，需要知道：
+这条消息为什么值得花时间、影响到谁、下一步该看什么。
+
+硬性要求：
+- 只写 1-2 句、40-80 字
+- 必须是判断而不是复述：写出影响范围、对比意义，或者需要验证的点
+- 信息不足时用"待验证""口径不明"标出，不要替公司下结论
+- 禁止出现：此举旨在／标志着／被视为／引发业界／值得关注的是／据悉／值得一提的是／
+  赋能／助力／打造／引领／重塑／具有重要意义
+- 禁止"该产品""该技术""该公司"这类开头，改用"这款模型""这一功能"或直接写主语
+- 结尾不要升华，不要喊口号
+
+只输出 editor_note 正文，不要引号、不要 JSON、不要任何前后缀说明。"""
+
+EDITOR_NOTE_USER_TEMPLATE = """请为下面这条新闻写编辑判断：
+
+标题：{cn_title}
+摘要：{cn_summary}
+来源：{source}
+分类：{category}
+信号分级：{signal_grade}
+
+原文（用于判断影响面，不要照抄）：
+{source_text}"""
+
+# 与 html_publisher.build_top_items 用同一套排序口径，
+# 保证写了 editor_note 的条目正是"要点速览"里展示的那几条
+GRADE_PRIORITY = {'重磅': 0, '值得关注': 1, '常规': 2}
+
+
+def _top_item_key(item: Dict):
+    return (GRADE_PRIORITY.get(item.get('signal_grade', '常规'), 2),
+            -(item.get('_score') or 0))
+
+
+def _clean_editor_note(raw: str) -> str:
+    """模型偶尔带引号、字段前缀或写成小作文，这里收敛成一句可直接渲染的文本。"""
+    if not raw:
+        return ''
+    note = raw.strip()
+    note = re.sub(r'^```[a-zA-Z]*\s*', '', note)
+    note = re.sub(r'\s*```$', '', note).strip()
+    if note.startswith('{'):
+        try:
+            note = str(json.loads(note).get('editor_note', '')).strip()
+        except json.JSONDecodeError:
+            return ''
+    note = re.sub(r'^(editor_note|洞察|编辑判断)\s*[:：]\s*', '', note, flags=re.IGNORECASE)
+    note = re.sub(r'\s+', ' ', note.strip().strip('"\'“”‘’').strip())
+    note = note.split('\n')[0].strip()
+    if len(note) > 120:
+        note = note[:120].rstrip('，,、；;') + '…'
+    return note
+
+
+def editor_notes_batch(items: List[Dict], top_n: int = 5) -> Tuple[List[Dict], Dict]:
+    """为分数最高的 top_n 条写编辑判断；LLM 不可用时静默跳过，不阻塞出稿。"""
+    stats = {'targeted': 0, 'written': 0, 'skipped': 0}
+    if not items:
+        return items, stats
+
+    targets = sorted(items, key=_top_item_key)[:top_n]
+    stats['targeted'] = len(targets)
+    print(f"\n✍️  === 编辑判断（前 {len(targets)} 条）===")
+
+    for item in targets:
+        title = item.get('cn_title') or item.get('title', '')
+        if not title:
+            stats['skipped'] += 1
+            continue
+        user_prompt = EDITOR_NOTE_USER_TEMPLATE.format(
+            cn_title=title,
+            cn_summary=str(item.get('cn_summary', ''))[:300],
+            source=item.get('source', ''),
+            category=item.get('category', ''),
+            signal_grade=item.get('signal_grade', ''),
+            source_text=str(item.get('source_text') or item.get('summary') or '')[:800],
+        )
+        try:
+            result = llm_chat(EDITOR_NOTE_SYSTEM, user_prompt, temperature=0.4)
+        except Exception as e:
+            print(f"  [!] editor_note 失败 '{title[:24]}…': {e}")
+            stats['skipped'] += 1
+            continue
+
+        note = _clean_editor_note(result)
+        if not note:
+            print(f"  [!] editor_note 为空 '{title[:24]}…'，跳过")
+            stats['skipped'] += 1
+            continue
+        item['editor_note'] = note
+        stats['written'] += 1
+        print(f"  ✔ {title[:26]}… → {note[:36]}…")
+
+    print(f"  📊 编辑判断: {stats['written']}/{stats['targeted']} 条已写入")
+    return items, stats
