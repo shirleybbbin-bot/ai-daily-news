@@ -147,6 +147,19 @@ rebase 真冲突时会停下来并打印 `git rebase --abort` 的退路，不会
 
 `~/.codex/` 对沙箱只读，替换后需重启 Codex 才会加载新配置。
 
+### 停摆时的一键自救
+
+流水线停摆通常同时踩到三件事，而这三件都在 Codex 沙箱能力之外（禁网、`~/.codex`
+与 `~` 不可写），只能在你自己的终端里跑：
+
+    ./scripts/fix_everything.sh              # 实际执行
+    ./scripts/fix_everything.sh --dry-run    # 只报告
+
+它按顺序做：`sync_and_push.sh` 推代码取产物 → `gh workflow run daily.yml` 触发云端 →
+备份并安装新心跳配置 → 注释掉 `~/.zshrc` 里的 `source ~/.zshrc` 自引用递归
+（`too many open files` 的来源）。脚本幂等，已完成的步骤自动跳过；每步尽力而为，
+没网时前两步失败也不会带走后两步的修复。最后打印质检与发布清单。
+
 ## 数据源
 
 - AIHOT精选、AIbase头条（必含关注度前5）
